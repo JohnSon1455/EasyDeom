@@ -1,22 +1,52 @@
-var express = require('express');
-var app = express();
-var http = require('http').Server(app);
-var io = require('socket.io')(http);
+var config = require('../config');
 
-app.get('/', function(req, res){
-  res.sendFile(__dirname + '/index.html');
-});
+if (typeof ot === 'undefined') {
+  var ot = {};
+}
 
-app.use('/ot.js', express.static('ot.js'));
-app.use('/node_modules', express.static('node_modules'));
+ot.Server = (function (global) {
+  'use strict';
 
-http.listen(3000, function(){
-  console.log('listening on *:3000');
-});
+  // Constructor. Takes the current document as a string and optionally the array
+  // of all operations.
+  function Server (document, operations) {
+    this.document = document;
+    this.operations = operations || [];
+  }
 
-var EditorSocketIOServer = require('./ot.js/editor-socketio-server.js');
-var server = new EditorSocketIOServer("", [], 1);
+  // Call this method whenever you receive an operation from a client.
+  Server.prototype.receiveOperation = function (revision, operation) {
+    if (revision < 0 || this.operations.length < revision) {
+      throw new Error("operation revision not in history");
+    }
+    // Find all operations that the client didn't know of when it sent the
+    // operation ...
+    var concurrentOperations = this.operations.slice(revision);
 
-io.on('connection', function(socket) {
-  server.addClient(socket);
-});
+    // ... and transform the operation against all these operations ...
+    var transform = operation.constructor.transform;
+    for (var i = 0; i < concurrentOperations.length; i++) {
+      operation = transform(operation, concurrentOperations[i])[0];
+    }
+
+    // ... and apply that on the document.
+    var newDocument = operation.apply(this.document);
+    // ignore if exceed the max length of document
+    if(newDocument.length > config.documentMaxLength && newDocument.length > this.document.length)
+        return;
+    this.document = newDocument;
+    // Store operation in history.
+    this.operations.push(operation);
+
+    // It's the caller's responsibility to send the operation to all connected
+    // clients and an acknowledgement to the creator.
+    return operation;
+  };
+
+  return Server;
+
+}(this));
+
+if (typeof module === 'object') {
+  module.exports = ot.Server;
+}
